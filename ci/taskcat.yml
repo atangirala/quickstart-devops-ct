@@ -1,0 +1,19 @@
+global:
+  owner: atangirala@ctepl.com
+  qsname: quickstart-devops-ct
+  #s3bucket: projectx-templates
+  regions:
+    - us-east-2
+  reporting: true
+tests:
+  # The following test will test in us-east-2 using devops-input-novpc.json as inputs
+  scenario-1:
+    regions:
+      - us-east-2
+    template_file: devops.template
+    parameter_input: devops-input-novpc.json
+  scenario-2:
+    regions:
+      - us-east-2
+    template_file: devops-master.template
+    parameter_input: devops-input-withvpc.json
