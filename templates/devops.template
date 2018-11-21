@@ -72,8 +72,6 @@ Metadata:
         default: BastionHost Key pair name
       AppKeyPairName:
         default: Application Host Key pair name
-      BastionAMIOS:
-        default: Bastion AMI Operating System
       RemoteAccessCIDR:
         default: Allowed Bastion external access CIDR
       AvailabilityZones:
