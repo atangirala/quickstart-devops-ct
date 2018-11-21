@@ -21,6 +21,6 @@
   },
   {
       "ParameterKey": "CodeCommitRepoName",
-      "ParameterValue": "devops-testvx"
+      "ParameterValue": "devops-withvpc"
   }
 ]

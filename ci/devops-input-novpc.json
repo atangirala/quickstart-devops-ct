@@ -8,10 +8,6 @@
       "ParameterValue": "$[taskcat_genaz_2]"
   },
   {
-      "ParameterKey": "RedshiftColumns",
-      "ParameterValue": ""
-  },
-  {
       "ParameterKey": "KeyPairName",
       "ParameterValue": "csa"
   },
@@ -45,6 +41,6 @@
   },
   {
       "ParameterKey": "CodeCommitRepoName",
-      "ParameterValue": "devops-testvx"
+      "ParameterValue": "devops-novpc"
   }
 ]
