@@ -906,7 +906,113 @@ Resources:
         - IpProtocol: tcp
           FromPort: '22'
           ToPort: '22'
+          SourceSecurityGroupId: !GetAtt BastionStack.Outputs.BastionSecurityGroupID
+
+  AppSecurityGroupTestEnv:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP Access to VPC CidrBlock
+      VpcId:
+        Fn::GetAtt:
+        - VPCStack
+        - Outputs.VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '3000'
+          ToPort: '3000'
+          SourceSecurityGroupId: !Ref PublicLoadBalancerSGTestEnv
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
           SourceSecurityGroupId: !GetAtt BastionStack.Outputs.BastionSecurityGroupID          
+
+  AppServerGroupTestEnv:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn: CodeRepo
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+        Count: '1'
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: '1'
+        MinInstancesInService: '1'
+        PauseTime: PT15M
+        WaitOnResourceSignals: 'true'
+    Properties:
+      VPCZoneIdentifier:
+        - !GetAtt VPCStack.Outputs.PrivateSubnet1AID
+        - !GetAtt VPCStack.Outputs.PrivateSubnet2AID
+      LaunchConfigurationName: !Ref 'LaunchConfigTestEnv'
+      MinSize: '1'
+      MaxSize: '1'
+      TargetGroupARNs:
+        - !Ref TargetGroupPublicTestEnv
+      NotificationConfiguration:
+        TopicARN: !Ref 'AutoScalingNotificationTopic'
+        NotificationTypes:
+          - autoscaling:EC2_INSTANCE_LAUNCH
+          - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+          - autoscaling:EC2_INSTANCE_TERMINATE
+          - autoscaling:EC2_INSTANCE_TERMINATE_ERROR
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-AppServerTestEnv
+          PropagateAtLaunch: 'true'
+  LaunchConfigTestEnv:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn: CodeRepo
+    Metadata:
+      AWS::CloudFormation::Init:
+        services:
+          sysvint:
+            codedeploy-agent:
+              enabled: 'true'
+              ensureRunning: 'true'    
+    Properties:
+      KeyName: !Ref 'AppKeyPairName'
+      ImageId: !FindInMap
+        - AWSRegionArch2AMI
+        - !Ref 'AWS::Region'
+        - !FindInMap
+          - InstanceType2Arch
+          - !Ref 'AppInstanceType'
+          - Arch
+      SecurityGroups:
+        - !Ref 'AppSecurityGroupTestEnv'
+      IamInstanceProfile: !Ref 'AppInstanceProfile'
+      InstanceType: !Ref 'AppInstanceType'
+      UserData: 
+        Fn::Base64: 
+          !Sub |
+          #!/bin/bash -x
+          yum update -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfigTestEnv --region ${AWS::Region}
+          yum -y update
+          yum install -y ruby
+          yum groupinstall -y "Development Tools"
+          /bin/mkdir -p /var/www/html/
+          /usr/bin/git clone https://github.com/atangirala/nodejs-codedeploy.git
+          cd nodejs-codedeploy && /bin/mv * /var/www/html/
+          /bin/rm -rf nodejs-codedeploy
+          /bin/chmod +x /var/www/html/node-app
+          /bin/mv /var/www/html/node-app /etc/init.d/
+          curl -sL https://rpm.nodesource.com/setup_10.x | sudo bash -
+          yum install -y nodejs          
+          cd /mnt 
+          /usr/bin/git config --system credential.helper '!aws codecommit credential-helper $@'
+          /usr/bin/git config --system credential.UseHttpPath true
+          /usr/bin/git clone ${CodeRepo.CloneUrlHttp}
+          /bin/cp -r /var/www/html/* /mnt/${CodeCommitRepoName}
+          cd /mnt/${CodeCommitRepoName}
+          /usr/bin/git add . && /usr/bin/git commit -m "Initial Commit" && /usr/bin/git push origin master
+          /bin/rm -rf /mnt/${CodeCommitRepoName}
+          cd /home/ec2-user
+          /bin/echo "0 12 * * * find /mnt/* -type d -ctime +1 -exec rm -rf {} \;" >> appcron
+          /usr/bin/crontab appcron
+          /usr/bin/aws s3 cp 's3://aws-codedeploy-${AWS::Region}/latest/codedeploy-agent.noarch.rpm' . --region ${AWS::Region}
+          yum install -y codedeploy-agent.noarch.rpm
+          /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource AppServerGroupTestEnv          
 
   AppServerGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -976,19 +1082,22 @@ Resources:
           /bin/mkdir -p /var/www/html/
           /usr/bin/git clone https://github.com/atangirala/nodejs-codedeploy.git
           cd nodejs-codedeploy && /bin/mv * /var/www/html/
+          /bin/rm -rf nodejs-codedeploy
           /bin/chmod +x /var/www/html/node-app
           /bin/mv /var/www/html/node-app /etc/init.d/
           curl -sL https://rpm.nodesource.com/setup_10.x | sudo bash -
-          yum install -y nodejs
-          /etc/init.d/node-app start
-          cd /mnt
+          yum install -y nodejs          
+          cd /mnt 
           /usr/bin/git config --system credential.helper '!aws codecommit credential-helper $@'
           /usr/bin/git config --system credential.UseHttpPath true
           /usr/bin/git clone ${CodeRepo.CloneUrlHttp}
           /bin/cp -r /var/www/html/* /mnt/${CodeCommitRepoName}
           cd /mnt/${CodeCommitRepoName}
           /usr/bin/git add . && /usr/bin/git commit -m "Initial Commit" && /usr/bin/git push origin master
+          /bin/rm -rf /mnt/${CodeCommitRepoName}
           cd /home/ec2-user
+          /bin/echo "0 12 * * * find /mnt/* -type d -ctime +1 -exec rm -rf {} \;" >> appcron
+          /usr/bin/crontab appcron
           /usr/bin/aws s3 cp 's3://aws-codedeploy-${AWS::Region}/latest/codedeploy-agent.noarch.rpm' . --region ${AWS::Region}
           yum install -y codedeploy-agent.noarch.rpm
           /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource AppServerGroup
@@ -1057,6 +1166,25 @@ Resources:
           FromPort: '443'
           ToPort: '443'
           CidrIp: '0.0.0.0/0'
+
+  PublicLoadBalancerSGTestEnv:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public LoadBalancer Security Group
+      VpcId:
+        Fn::GetAtt:
+        - VPCStack
+        - Outputs.VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+          
   PublicLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -1094,6 +1222,44 @@ Resources:
       LoadBalancerArn: !Ref 'PublicLoadBalancer'
       Port: 80
       Protocol: HTTP
+      
+  PublicLoadBalancerTestEnv:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+      - Key: idle_timeout.timeout_seconds
+        Value: '30'
+      Subnets:
+        - !GetAtt VPCStack.Outputs.PublicSubnet1ID
+        - !GetAtt VPCStack.Outputs.PublicSubnet2ID
+      SecurityGroups: [!Ref 'PublicLoadBalancerSGTestEnv']
+  TargetGroupPublicTestEnv:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      Protocol: HTTP
+      Port: 3000
+      UnhealthyThresholdCount: 2
+      VpcId:
+        Fn::GetAtt:
+        - VPCStack
+        - Outputs.VPCID
+  PublicLoadBalancerListenerTestEnv:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - PublicLoadBalancerTestEnv
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref 'TargetGroupPublicTestEnv'
+          Type: 'forward'
+      LoadBalancerArn: !Ref 'PublicLoadBalancerTestEnv'
+      Port: 80
+      Protocol: HTTP      
       
   CodeRepo:
     Type: AWS::CodeCommit::Repository
@@ -1208,6 +1374,25 @@ Resources:
       DeploymentConfigName: !Ref CodeDeployDefaultOneAtATime
       AutoScalingGroups: 
         - !Ref 'AppServerGroup'
+        
+  CodeDeployApplicationTestEnv:
+    Type: "AWS::CodeDeploy::Application"    
+    Properties:
+      ApplicationName: !Sub ${AWS::StackName}-TestApplication
+  CodeDeployDefaultOneAtATimeTestEnv: 
+    Type: AWS::CodeDeploy::DeploymentConfig
+    Properties: 
+      MinimumHealthyHosts: 
+        Type: "HOST_COUNT"
+        Value: 0
+  DeploymentGroupTestEnv:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplicationTestEnv
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentConfigName: !Ref CodeDeployDefaultOneAtATimeTestEnv
+      AutoScalingGroups: 
+        - !Ref 'AppServerGroupTestEnv'        
       
   CodePipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -1270,6 +1455,25 @@ Resources:
             - - !Ref 'AWS::StackName'
               - BuildArtifact
           RunOrder: 1
+      - Name: TestDeploy
+        Actions:          
+        - ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CodeDeploy
+            Version: 1
+          Configuration:
+            ApplicationName: !Ref CodeDeployApplicationTestEnv
+            DeploymentGroupName: !Ref DeploymentGroupTestEnv
+          InputArtifacts:
+          - Name: !Join
+            - '-'
+            - - !Ref 'AWS::StackName'
+              - BuildArtifact
+          Name: TestDeploy
+          OutputArtifacts: [
+            ]
+          RunOrder: 1          
       - Name: Approval
         Actions:
         - ActionTypeId:
@@ -1282,7 +1486,7 @@ Resources:
             CustomData: Manual Approval for Production Deployment
           Name: Approval
           RunOrder: 1          
-      - Name: Deploy
+      - Name: ProductionDeploy
         Actions:          
         - ActionTypeId:
             Category: Deploy
@@ -1297,7 +1501,7 @@ Resources:
             - '-'
             - - !Ref 'AWS::StackName'
               - BuildArtifact
-          Name: Deploy
+          Name: ProductionDeploy
           OutputArtifacts: [
             ]
           RunOrder: 1
