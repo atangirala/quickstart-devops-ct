@@ -1601,7 +1601,7 @@ Outputs:
     Value: !Ref PublicSubnet2CIDR
   CodeCommitRepoName:
     Value: !Ref CodeCommitRepoName
-  LoadBalancerDNS:
-    Value: !GetAtt PublicLoadBalancer.DNSName
-  LoadBalancerDNSEndpoint:
+  ProductionLoadBalancerDNSEndpoint:
     Value: !Sub 'http://${PublicLoadBalancer.DNSName}'
+  TestingLoadBalancerDNSEndpoint:
+    Value: !Sub 'http://${PublicLoadBalancerTestEnv.DNSName}'
